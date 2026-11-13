@@ -11,11 +11,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 from scipy.stats import theilslopes, kendalltau
 
 # ---------------- Config ----------------
-DATA = "data_daily_FR_METEOFRANCE.csv"
-METADATA = "meta_all.csv"
+DATA = "data/data_daily_FR*.csv"
+METADATA = "data/meta_all.csv"
 OUT_DIR = Path("outputs")
 VAR = "HS_after_gapfill"         # snow depth in cm
 SEASON_MONTHS = [12, 1, 2, 3]    # DJFM
@@ -28,7 +30,9 @@ YEARS = (1961, 2020)
 OUT_DIR.mkdir(exist_ok=True)
 
 # ---------------- Load & seasonal means ----------------
-df = pd.read_csv(DATA, usecols=["Name", "Date", VAR], parse_dates=["Date"])
+files = sorted(Path(".").glob(DATA))
+print("Files:", [f.name for f in files])
+df = pd.concat(pd.read_csv(f, usecols=["Name", "Date", VAR], parse_dates=["Date"]) for f in files)
 df = df[df["Date"].dt.month.isin(SEASON_MONTHS)].copy()
 # winter year = year of the January (December belongs to the next winter)
 df["winter"] = df["Date"].dt.year + (df["Date"].dt.month == 12)
@@ -91,14 +95,22 @@ res.to_csv(OUT_DIR / "station_trends.csv")
 
 if {"Longitude", "Latitude"} <= set(res.columns):
     r = res.dropna(subset=["Longitude", "Latitude"])
-    fig, ax = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig = plt.figure(figsize=(14, 5.5))
+    ax = [fig.add_subplot(1, 2, 1, projection=ccrs.PlateCarree()), fig.add_subplot(1, 2, 2)]
     vmax = np.nanpercentile(np.abs(r["slope"]), 95)
+    ax[0].set_extent([r["Longitude"].min() - 0.5, r["Longitude"].max() + 0.5,
+                      r["Latitude"].min() - 0.5, r["Latitude"].max() + 0.5])
+    ax[0].add_feature(cfeature.NaturalEarthFeature("physical", "land", "10m"), facecolor="0.95")
+    ax[0].add_feature(cfeature.LAKES.with_scale("10m"), facecolor="lightsteelblue", edgecolor="none")
+    ax[0].add_feature(cfeature.RIVERS.with_scale("10m"), edgecolor="lightsteelblue", lw=0.5)
+    ax[0].add_feature(cfeature.BORDERS.with_scale("10m"), lw=0.8, ls="--")
+    ax[0].add_feature(cfeature.COASTLINE.with_scale("10m"), lw=0.6)
+    ax[0].gridlines(draw_labels=True, lw=0.3, color="grey", alpha=0.6)
     sc = ax[0].scatter(r["Longitude"], r["Latitude"], c=r["slope"], cmap="RdBu", vmin=-vmax, vmax=vmax,
-                       s=np.where(r["p"] < 0.05, 70, 25), edgecolor="k", lw=0.4)
-    ax[0].set_xlabel("Longitude"); ax[0].set_ylabel("Latitude")
+                       s=np.where(r["p"] < 0.05, 70, 25), edgecolor="k", lw=0.4,
+                       transform=ccrs.PlateCarree(), zorder=3)
     ax[0].set_title("Snow depth trend (large markers: p < 0.05)")
-    ax[0].set_aspect(1 / np.cos(np.deg2rad(r["Latitude"].mean())))
-    plt.colorbar(sc, ax=ax[0], label="cm/decade")
+    plt.colorbar(sc, ax=ax[0], label="cm/decade", shrink=0.8)
     ax[1].scatter(r["Elevation"], r["slope"], c=np.where(r["p"] < 0.05, "k", "grey"), s=20)
     ax[1].axhline(0, color="k", lw=0.5)
     ax[1].set_xlabel("Elevation (m)"); ax[1].set_ylabel("Trend (cm/decade)")
@@ -112,6 +124,6 @@ else:
     ax.tick_params(axis="y", labelsize=4)
 
 fig.tight_layout()
-fig.savefig(OUT_DIR / "spatial_trends.png", dpi=200)
+fig.savefig(OUT_DIR / "spatial_trends_maps.png", dpi=200)
 print(res["slope"].describe())
 print(f"Significant stations (p<0.05): {(res['p'] < 0.05).sum()} / {len(res)}")
